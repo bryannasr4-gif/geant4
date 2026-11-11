@@ -41,8 +41,12 @@
 #include "G4ElementSelector.hh"
 
 #include "G4Material.hh"
+#include "G4MuonMinus.hh"
 #include "G4Nucleus.hh"
+#include "G4SystemOfUnits.hh"
 #include "Randomize.hh"
+
+G4bool G4ElementSelector::fMuonicHydrogenTransfer = false;
 
 //....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
 
@@ -107,6 +111,49 @@ const G4Element* G4ElementSelector::SelectZandA(const G4Track& track, G4Nucleus*
         break;
       }
     }
+
+    // Optional (off by default): transfer of the muon from hydrogen.
+    // A mu-p atom is small and neutral; in a solid or a liquid it gives
+    // its muon to a heavier nucleus at a rate of 1e10-1e11 /s, far above
+    // the decay rate 4.55e5 /s (D.F.Measday, Phys. Rep. 354 (2001) 243).
+    // A mu- selected on hydrogen is re-assigned to a Z>1 element drawn
+    // with the weights above. The random number already drawn is
+    // re-scaled, so no extra random number is used.
+    if (fMuonicHydrogenTransfer && 1 == (*theElementVector)[i]->GetZasInt()
+        && track.GetDefinition() == G4MuonMinus::MuonMinus())
+    {
+      const G4State state = mat->GetState();
+      if (kStateSolid == state || kStateLiquid == state
+          || (kStateUndefined == state && mat->GetDensity() >= 0.1 * CLHEP::g / CLHEP::cm3))
+      {
+        G4double wheavy = 0.0;
+        for (std::size_t j = 0; j < numberOfElements; ++j)
+        {
+          if (1 < (*theElementVector)[j]->GetZasInt())
+          {
+            wheavy += prob[j] - ((0 < j) ? prob[j - 1] : 0.0);
+          }
+        }
+        if (0.0 < wheavy)
+        {
+          G4double low = (0 < i) ? prob[i - 1] : 0.0;
+          G4double x = wheavy * (sum - low) / (prob[i] - low);
+          G4double acc = 0.0;
+          for (std::size_t j = 0; j < numberOfElements; ++j)
+          {
+            if (1 < (*theElementVector)[j]->GetZasInt())
+            {
+              acc += prob[j] - ((0 < j) ? prob[j - 1] : 0.0);
+              i = j;
+              if (x <= acc)
+              {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   const G4Element* elm = (*theElementVector)[i];
@@ -135,4 +182,18 @@ const G4Element* G4ElementSelector::SelectZandA(const G4Track& track, G4Nucleus*
   target->SetParameters(A, Z);
 
   return elm;
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+void G4ElementSelector::SetMuonicHydrogenTransfer(G4bool val)
+{
+  fMuonicHydrogenTransfer = val;
+}
+
+//....oooOO0OOooo........oooOO0OOooo........oooOO0OOooo........oooOO0OOooo....
+
+G4bool G4ElementSelector::GetMuonicHydrogenTransfer()
+{
+  return fMuonicHydrogenTransfer;
 }

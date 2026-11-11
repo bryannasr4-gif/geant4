@@ -68,6 +68,13 @@ class G4ElementSelector
 
     virtual const G4Element* SelectZandA(const G4Track& track, G4Nucleus*);
 
+    // Optional, off by default; set it before the run starts.
+    // If true, a mu- selected on hydrogen in a solid or liquid material
+    // that also contains heavier elements is re-assigned to one of them
+    // (muon transfer from hydrogen). Other particles are not affected.
+    static void SetMuonicHydrogenTransfer(G4bool val);
+    static G4bool GetMuonicHydrogenTransfer();
+
   private:
 
     // hide assignment operator as private
@@ -75,6 +82,8 @@ class G4ElementSelector
     G4ElementSelector(const G4ElementSelector&);
 
     std::vector<G4double> prob;
+
+    static G4bool fMuonicHydrogenTransfer;
 };
 
 #endif
