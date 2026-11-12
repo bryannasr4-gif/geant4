@@ -39,6 +39,8 @@
 #include "G4VDecayChannel.hh"
 #include "Randomize.hh"
 
+#include <cmath>
+
 G4PhaseSpaceDecayChannel::G4PhaseSpaceDecayChannel(G4int Verbose)
   : G4VDecayChannel("Phase Space", Verbose)
 {}
@@ -555,8 +557,33 @@ G4DecayProducts* G4PhaseSpaceDecayChannel::ManyBodyDecayIt()
   auto sm = new G4double[numberOfDaughters];
   G4double tmas;
   G4double weight = 1.0;
-  G4int numberOfTry = 0;
-  const std::size_t MAX_LOOP = 10000;
+  // Every proposal counts against MAX_LOOP; products are built only from an accepted proposal
+  const std::size_t MAX_LOOP = 20000;
+  G4bool accepted = false;
+
+  // Upper bound of the weight prod_i p*_i for the masses of this decay (as in
+  // G4HadPhaseSpaceGenbod::ComputeWeightScale): Pmx(sm[i], m_i, sm[i+1]) rises with sm[i] and falls
+  // with sm[i+1], and sm[i] <= Q + S_i, sm[i+1] >= S_{i+1}, where S_i is the sum of the masses of
+  // daughters i..n-1 and Q = parentmass - S_0
+  G4double weightMax = 1.0;
+  G4double massAbove = sumofdaughtermass;
+  for (index = 0; index < numberOfDaughters - 1; ++index)
+  {
+    G4double massBelow = massAbove - daughtermass[index];
+    weightMax *= Pmx(parentmass - sumofdaughtermass + massAbove, daughtermass[index], massBelow);
+    massAbove = massBelow;
+  }
+  if (!(weightMax > 0.0) || !std::isfinite(weightMax))
+  {
+    // no phase space: the sum of the daughter masses equals the parent mass (within rounding)
+    delete[] sm;
+    delete[] daughtermass;
+    delete[] daughtermomentum;
+    delete products;
+    G4Exception("G4PhaseSpaceDecayChannel::ManyBodyDecayIt()", "PART112", JustWarning,
+                "Can not create decay products: no phase space");
+    return nullptr;  // Error detection
+  }
 
   for (std::size_t loop_counter = 0; loop_counter < MAX_LOOP; ++loop_counter)
   {
@@ -649,7 +676,7 @@ G4DecayProducts* G4PhaseSpaceDecayChannel::ManyBodyDecayIt()
       }
 
       // calculate weight of this events
-      weight *= daughtermomentum[index] / sm[index];
+      weight *= daughtermomentum[index];  // Lorentz-invariant phase-space weight
 #ifdef G4VERBOSE
       if (GetVerboseLevel() > 1)
       {
@@ -666,33 +693,50 @@ G4DecayProducts* G4PhaseSpaceDecayChannel::ManyBodyDecayIt()
     }
 #endif
 
-    // exit if number of Try exceeds 100
-    if (++numberOfTry > 100)
+    // a weight that is not finite or above its bound is an error (never clipped)
+    if (!std::isfinite(weight) || weight > weightMax * (1.0 + 1.0e-12))
     {
-#ifdef G4VERBOSE
-      if (GetVerboseLevel() > 0)
-      {
-        G4cout << "G4PhaseSpaceDecayChannel::ManyBodyDecayIt()" << G4endl;
-        G4cout << "Cannot determine Decay Kinematics " << G4endl;
-        G4cout << "parent : " << *parent_name << G4endl;
-        G4cout << "daughters : ";
-        for (index = 0; index < numberOfDaughters; ++index)
-        {
-          G4cout << *daughters_name[index] << " , ";
-        }
-        G4cout << G4endl;
-      }
-#endif
-      G4Exception("G4PhaseSpaceDecayChannel::ManyBodyDecayIt()", "PART113", JustWarning,
-                  "Cannot decay: Decay Kinematics cannot be calculated");
-
       delete[] sm;
       delete[] daughtermass;
       delete[] daughtermomentum;
       delete products;
+      G4Exception("G4PhaseSpaceDecayChannel::ManyBodyDecayIt()", "PART118", JustWarning,
+                  "Cannot decay: phase-space weight not finite or above its bound");
       return nullptr;  // Error detection
     }
-    if (weight < G4UniformRand()) break;
+    // accept with probability weight / weightMax
+    if (G4UniformRand() * weightMax <= weight)
+    {
+      accepted = true;
+      break;
+    }
+  }
+
+  // exit if no proposal was accepted within MAX_LOOP proposals
+  if (!accepted)
+  {
+#ifdef G4VERBOSE
+    if (GetVerboseLevel() > 0)
+    {
+      G4cout << "G4PhaseSpaceDecayChannel::ManyBodyDecayIt()" << G4endl;
+      G4cout << "Cannot determine Decay Kinematics " << G4endl;
+      G4cout << "parent : " << *parent_name << G4endl;
+      G4cout << "daughters : ";
+      for (index = 0; index < numberOfDaughters; ++index)
+      {
+        G4cout << *daughters_name[index] << " , ";
+      }
+      G4cout << G4endl;
+    }
+#endif
+    G4Exception("G4PhaseSpaceDecayChannel::ManyBodyDecayIt()", "PART113", JustWarning,
+                "Cannot decay: Decay Kinematics cannot be calculated");
+
+    delete[] sm;
+    delete[] daughtermass;
+    delete[] daughtermomentum;
+    delete products;
+    return nullptr;  // Error detection
   }
 
 #ifdef G4VERBOSE

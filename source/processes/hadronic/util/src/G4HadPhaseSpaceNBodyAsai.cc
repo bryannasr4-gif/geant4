@@ -37,6 +37,7 @@
 #include "Randomize.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iterator>
 #include <numeric>
@@ -70,13 +71,34 @@ void G4HadPhaseSpaceNBodyAsai::GenerateMultiBody(G4double initialMass,
   G4double weight = 1.0;
   G4int numberOfTry = 0;
   G4int i;
+  const G4int maxNumberOfTries = 20000;
+  G4bool accepted = false;
+  // Upper bound of the weight prod_i p*_i for the masses of this decay (as in
+  // G4HadPhaseSpaceGenbod::ComputeWeightScale)
+  G4double weightMax = 1.0;
+  G4double massAbove = sumofmasses;
+  for (i = 0; i < numberOfDaughters - 1; ++i)
+  {
+    G4double massBelow = massAbove - masses[i];
+    weightMax *= TwoBodyMomentum(initialMass - sumofmasses + massAbove, masses[i], massBelow);
+    massAbove = massBelow;
+  }
+  if (!(weightMax > 0.0) || !std::isfinite(weightMax))
+  {
+    if (GetVerboseLevel() > 0)
+    {
+      G4cout << "G4HadPhaseSpaceNBodyAsai::Generate no phase space" << G4endl;
+    }
+    return;  // Error detection
+  }
 
   std::vector<G4double> rd(numberOfDaughters);
   do
   {
     // Generate random number in descending order
     rd[0] = 1.0;
-    std::generate(rd.begin() + 1, rd.end(), uniformRand);
+    std::generate(rd.begin() + 1, rd.end() - 1, uniformRand);
+    rd.back() = 0.0;  // the last intermediate mass is the mass of the last daughter
     std::sort(rd.begin(), rd.end(), std::greater<G4double>());
 
     if (GetVerboseLevel() > 1) PrintVector(rd, "rd", G4cout);
@@ -123,7 +145,7 @@ void G4HadPhaseSpaceNBodyAsai::GenerateMultiBody(G4double initialMass,
       }
 
       // calculate weight of this events
-      weight *= daughtermomentum[i] / sm[i];
+      weight *= daughtermomentum[i];  // Lorentz-invariant phase-space weight
       if (GetVerboseLevel() > 1)
       {
         G4cout << " daughter " << i << ": momentum " << daughtermomentum[i] / GeV << " GeV/c"
@@ -135,8 +157,17 @@ void G4HadPhaseSpaceNBodyAsai::GenerateMultiBody(G4double initialMass,
       G4cout << " weight: " << weight << G4endl;
     }
 
-    // exit if number of Try exceeds 100
-    if (numberOfTry++ > 100)
+    // a weight that is not finite or above its bound is an error (never clipped)
+    if (!std::isfinite(weight) || weight > weightMax * (1.0 + 1.0e-12))
+    {
+      G4Exception("G4HadPhaseSpaceNBodyAsai::GenerateMultiBody()", "HAD_NBODYASAI_001", JustWarning,
+                  "Cannot decay: phase-space weight not finite or above its bound");
+      return;  // Error detection
+    }
+    // accept with probability weight / weightMax
+    accepted = (G4UniformRand() * weightMax <= weight);
+    // exit if number of Try exceeds maxNumberOfTries
+    if (!accepted && ++numberOfTry >= maxNumberOfTries)
     {
       if (GetVerboseLevel() > 0)
       {
@@ -145,7 +176,7 @@ void G4HadPhaseSpaceNBodyAsai::GenerateMultiBody(G4double initialMass,
       }
       return;  // Error detection
     }
-  } while (weight > G4UniformRand()); /* Loop checking, 02.11.2015, A.Ribon */
+  } while (!accepted); /* Loop checking, 02.11.2015, A.Ribon */
 
   if (GetVerboseLevel() > 1)
   {

@@ -45,6 +45,8 @@
 #include "G4ios.hh"
 #include "Randomize.hh"
 
+#include <cmath>
+
 G4GeneralPhaseSpaceDecay::G4GeneralPhaseSpaceDecay(G4int Verbose)
   : G4VDecayChannel("Phase Space", Verbose), parentmass(0.), theDaughterMasses(0)
 {
@@ -404,6 +406,30 @@ G4DecayProducts* G4GeneralPhaseSpaceDecay::ManyBodyDecayIt()
   G4double weight = 1.0;
   G4int numberOfTry = 0;
   G4int index1;
+  // the loop ends with an accepted proposal, or with a failure after maxNumberOfTries proposals
+  const G4int maxNumberOfTries = 20000;
+  G4bool accepted = false;
+  // Upper bound of the weight prod_i p*_i for the masses of this decay (as in
+  // G4HadPhaseSpaceGenbod::ComputeWeightScale)
+  G4double weightMax = 1.0;
+  G4double massAbove = sumofdaughtermass;
+  for (index1 = 0; index1 < numberOfDaughters - 1; ++index1)
+  {
+    G4double massBelow = massAbove - daughtermass[index1];
+    weightMax *= Pmx(parentmass - sumofdaughtermass + massAbove, daughtermass[index1], massBelow);
+    massAbove = massBelow;
+  }
+  if (!(weightMax > 0.0) || !std::isfinite(weightMax))
+  {
+    if (GetVerboseLevel() > 0)
+    {
+      G4cout << "G4GeneralPhaseSpaceDecay::ManyBodyDecayIt: no phase space" << G4endl;
+    }
+    delete[] sm;
+    delete[] daughtermass;
+    delete[] daughtermomentum;
+    return NULL;  // Error detection
+  }
 
   do
   {
@@ -476,7 +502,7 @@ G4DecayProducts* G4GeneralPhaseSpaceDecay::ManyBodyDecayIt()
       else
       {
         // calculate weight of this events
-        weight *= daughtermomentum[index1] / sm[index1];
+        weight *= daughtermomentum[index1];  // Lorentz-invariant phase-space weight
         if (GetVerboseLevel() > 1)
         {
           G4cout << "     daughter " << index1 << ":" << *daughters_name[index1];
@@ -489,8 +515,21 @@ G4DecayProducts* G4GeneralPhaseSpaceDecay::ManyBodyDecayIt()
       G4cout << "    weight: " << weight << G4endl;
     }
 
-    // exit if number of Try exceeds 100
-    if (numberOfTry++ > 100)
+    // a weight that is not finite or above its bound is an error (never clipped)
+    if (!std::isfinite(weight) || weight > weightMax * (1.0 + 1.0e-12))
+    {
+      G4Exception("G4GeneralPhaseSpaceDecay::ManyBodyDecayIt()", "HAD_PHASESPACE_002", JustWarning,
+                  "Cannot decay: phase-space weight not finite or above its bound");
+      delete[] sm;
+      delete[] daughtermass;
+      delete[] daughtermomentum;
+      return NULL;  // Error detection
+    }
+    // accept with probability weight / weightMax
+    accepted = (G4UniformRand() * weightMax <= weight);
+
+    // exit if number of Try exceeds maxNumberOfTries
+    if (!accepted && ++numberOfTry >= maxNumberOfTries)
     {
       if (GetVerboseLevel() > 0)
       {
@@ -502,7 +541,7 @@ G4DecayProducts* G4GeneralPhaseSpaceDecay::ManyBodyDecayIt()
       delete[] daughtermomentum;
       return NULL;  // Error detection
     }
-  } while (weight > G4UniformRand()); /* Loop checking, 02.11.2015, A.Ribon */
+  } while (!accepted); /* Loop checking, 02.11.2015, A.Ribon */
   if (GetVerboseLevel() > 1)
   {
     G4cout << "Start calculation of daughters momentum vector " << G4endl;
